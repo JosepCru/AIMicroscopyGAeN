@@ -25,10 +25,11 @@ Enhance feature extraction for nanoparticle characterization.
 - **Ejemplo4** 🤖 – Machine learning and deep learning models
 
 ## 📂 Repository Structure
-
-/AIMicroscopyGAeN
-│── PythonScripts/     # Sample scripts for Autoscript in Spectra
-│── README.md          # Project documentation  
+```
+AIMicroscopyGAeN
+  │── PythonScripts/     # Sample scripts for Autoscript in Spectra
+  │── README.md          # Project documentation  
+```
 
 ## 🚀 Getting Started
 
@@ -36,5 +37,7 @@ Enhance feature extraction for nanoparticle characterization.
 
 Clone the repository:
 
+```
 git clone https://github.com/yourusername/AIMicroscopyGAeN.git
 cd AIMicroscopyGAeN
+```
