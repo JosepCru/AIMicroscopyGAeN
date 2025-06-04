@@ -7,12 +7,8 @@ from PIL import Image
 from widgets.interactive_image import Interactive_image
 import torch
 import torch.utils.data
+from scipy.ndimage import label
 import cv2
-from auxiliar_functions import create_boxes, isolate_particles
-
-#from autoscript_tem_microscope_client import TemMicroscopeClient
-#from autoscript_tem_microscope_client.enumerations import *
-#from autoscript_tem_microscope_client.structures import *
 
 
 #TESTING
@@ -90,40 +86,25 @@ class Detection_gui(ctk.CTk):
         self.directory = self.frame_settings.directory_selector
         self.np_index = self.frame_settings.nanoparticle_counter.counter_var
         self.number_added = 0
-        self.model_ml = torch.load('ModelNP_newContrast_900.pt')
         self.load_sample()
 
+
+        # Load the model, this should be done only once at the beginning of the program, save this in case we want to use it for changing the model in a future
+        self.model_ml = torch.load('ModelNP_newContrast_900.pt')
+        
 
 # This is the function that we call when the button Start is pressed, we should start here the routine of detection
     def toggle_acquisition(self):
         if not self.is_running:
             self.start_acquisition()
+            self.process_folder_and_update_gui("C:\\Users\\josep\\Desktop\\extra_training\\images", self.model_ml, num_images=int(self.np_number.get()), th=0.8)
 
-            num_images=int(self.np_number.get())
-
-            for i in range(num_images):
-                image = f"C:\\Users\\josep\\Desktop\\extra_training\\images\\image_{i:04d}.png"
-                image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
-
-                # Movement and detection
-
-                self.number_added = int(self.np_index.get()) + 1
-                self.np_index.set(self.number_added)
-                self.detect_and_plot(image, th=0.2)  # Assuming the image is a grayscale image
-
-                #microscope = TemMicroscopeClient()
-                #microscope.connect()
-                #microscope.optics.optical_mode = OpticalMode.STEM
-                #num_images = 1000
-                #step_size = 0.0001
-                #movement_direction = self.build_spiral_coordinates(total_cells=total_steps)
-                #for (x, y) in movement_direction:
-                #    self.movement(x, y, step_size, microscope)
 
             # Testing, we should start here the routine of detection
-            #self.number_added = int(self.np_index.get()) + 1
+            #self.number_added = self.np_index.get() + 1
             #self.np_index.set(self.number_added)
             #self.create_particle_image(self.number_added)
+
         else:
             self.stop_acquisition()
             
@@ -168,6 +149,7 @@ class Detection_gui(ctk.CTk):
         image.save(image_path)
     
     def test_create_np(self):
+
         self.restart_frame_acquisition()
         np_directory = f"{self.directory.directory}\\{self.list_name[self.number_added-1]}_NP_Detected"
         os.makedirs(np_directory, exist_ok=True)
@@ -272,76 +254,185 @@ class Detection_gui(ctk.CTk):
     def show_navigation(self):
         self.frame_settings.frame_image.pack(padx = 5, pady = 10, fill = 'x')
 
-    # <-------------------------------------------------------------------------Particle Plotting Functions------------------------------------------------------------------------->
-    
-    def prediction(self, image, th=0.5):
-        pred, zones = self.model_ml.predict(image, th=th)
-        pred_mask = np.squeeze(pred[0])
-        labeled_mask, num_particles = isolate_particles(pred_mask, th)
-        return labeled_mask, zones, num_particles, pred_mask
 
-    def plot_particles(self, image, final_bboxes,image_color=None):
+    def crop(self, image, bbox):
+        r, c, s = bbox
+        crop = image[r:r+s, c:c+s]
+        return crop
+
+
+    def process_folder_and_update_gui(self, folder_path, model, num_images=5, th=0.8):
+        image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        image_files.sort()  # Opcional: asegura orden
+        processed = 0
+        for fname in image_files:
+            img_path = os.path.join(folder_path, fname)
+            image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            self.image_microscope.change_image(image)
+
+            # Detecta partículas
+            img_with_boxes, final_bboxes = self.detect_particles_in_image(image, model, th=th)
+            if img_with_boxes is not None and len(final_bboxes) > 0:
+                # Mostrar en la interfaz
+                self.image_prediction.change_image(img_with_boxes)
+                # Crear widgets pequeños para cada nanopartícula
+                self.restart_frame_acquisition()
+                for i, bbox in enumerate(final_bboxes):
+                    start_row, start_col, side = bbox
+                    
+                    particle_crop = self.crop(img_with_boxes, bbox)
+                    particle_crop = np.array(particle_crop).astype(np.uint8)
+
+                    new_nano = Interactive_image(self.frame_acquisition, particle_crop, title = f'NP_{i+1}', subtitle=f'Coords:', font=('American typewriter', 24), subfont=('American typewriter', 14), width=150, height=150)
+                    new_nano.pack(side = 'left')
+                    
+                # Puedes guardar metadatos aquí usando tus listas
+                self.list_index.append(processed)
+                self.list_name.append(fname)
+                self.list_x.append(start_col)
+                self.list_y.append(start_row)
+                self.list_Pcoordinates.append(final_bboxes)
+                self.save_data()
+                processed += 1
+                self.np_index.set(processed)
+                if processed >= num_images:
+                    break
+
+
+    def isolate_particles(self, pred_mask, threshold=0.5):
+        # Convierte la máscara de probabilidades en máscara binaria (0 o 1)
+        binary_mask = (pred_mask > threshold).astype(np.uint8)
+        # Etiqueta los grupos de píxeles conectados (componentes)
+        labeled_mask, num_particles = label(binary_mask)
+        return labeled_mask, num_particles
+
+    def get_indices_box(self, indices):
+        """Calcula los límites (r_min, r_max, c_min, c_max) a partir de los índices de probabilidad."""
+        rows, cols = indices
+        if len(rows) == 0 or len(cols) == 0:
+            return None
+        return (np.min(rows), np.max(rows), np.min(cols), np.max(cols))
+
+    def box_contains_any_center(self,index_box, zone_centers):
+        """
+        Dada una caja de índices (r_min, r_max, c_min, cmax) y una lista de centros (x, y),
+        retorna True si al menos uno de esos centros está contenido en la caja.
+        Se asume que x corresponde a la fila y y a la columna.
+        """
+        rmin, rmax, cmin, cmax = index_box
+        for center in zone_centers:
+            x, y = center  # Solo se usan las dos primeras coordenadas
+            if rmin <= x <= rmax and cmin <= y <= cmax:
+                return True
+        return False
+
+    def rectangle_distance_indices(self, box1, box2):
+        """
+        Calcula la distancia entre dos cajas definidas por índices.
+        Cada caja es (r_min, r_max, c_min, c_max). La distancia se define a partir del gap horizontal y vertical.
+        Si se solapan en alguna dirección, el gap es 0 en esa dirección.
+        """
+        rmin1, rmax1, cmin1, cmax1 = box1
+        rmin2, rmax2, cmin2, cmax2 = box2
+        gap_h = max(0, max(cmin1, cmin2) - min(cmax1, cmax2))
+        gap_v = max(0, max(rmin1, rmin2) - min(rmax1, rmax2))
+        return np.sqrt(gap_h**2 + gap_v**2)
+
+    def merge_index_boxes(self, box1, box2):
+        """Fusiona dos cajas (r_min, r_max, c_min, c_max) tomando la unión de sus límites."""
+        rmin1, rmax1, cmin1, cmax1 = box1
+        rmin2, rmax2, cmin2, cmax2 = box2
+        return (min(rmin1, rmin2), max(rmax1, rmax2),
+                min(cmin1, cmin2), max(cmax1, cmax2))
+
+    def merge_nearby_index_boxes(self, boxes, merge_threshold):
+        """
+        Fusiona cajas de índices que estén separadas por una distancia (entre sus límites)
+        menor que merge_threshold. Se iterará hasta que ya no se puedan fusionar.
+        """
+        merged_boxes = boxes.copy()
+        merged = True
+        while merged:
+            merged = False
+            new_boxes = []
+            used = [False] * len(merged_boxes)
+            for i in range(len(merged_boxes)):
+                if used[i]:
+                    continue
+                current = merged_boxes[i]
+                for j in range(i+1, len(merged_boxes)):
+                    if used[j]:
+                        continue
+                    if self.rectangle_distance_indices(current, merged_boxes[j]) < merge_threshold:
+                        current = self.merge_index_boxes(current, merged_boxes[j])
+                        used[j] = True
+                        merged = True
+                new_boxes.append(current)
+                used[i] = True
+            merged_boxes = new_boxes
+        return merged_boxes
+
+    def index_box_to_square(self, index_box, image_shape):
+        """
+        Convierte una caja de índices (r_min, r_max, c_min, c_max) en un cuadrado.
+        Se calcula el lado como el máximo entre la altura y el ancho y se centra.
+        """
+        rmin, rmax, cmin, cmax = index_box
+        height = rmax - rmin
+        width = cmax - cmin
+        side = max(height, width)
+        center_r = (rmin + rmax) // 2
+        center_c = (cmin + cmax) // 2
+        half_side = side // 2
+        start_row = max(center_r - half_side, 0)
+        start_col = max(center_c - half_side, 0)
+        if start_row + side > image_shape[0]:
+            start_row = image_shape[0] - side
+        if start_col + side > image_shape[1]:
+            start_col = image_shape[1] - side
+        return (start_row, start_col, side)
+
+
+    def detect_particles_in_image(self, image, model, th=0.8):
+
+        # Modelo debe devolver [pred, zones], igual que tu script
+        pred, zones = model.predict(image)
+        pred_mask = np.squeeze(pred[0])
+        labeled_mask, num_particles = self.isolate_particles(pred_mask, th)
+        image_color = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+        # Extraer cajas
+        index_boxes = []
+        min_particle_size = 0
+        for x in range(1, num_particles + 1):
+            particle_indices = np.where(labeled_mask == x)
+            ibox = self.get_indices_box(particle_indices)
+            if ibox is not None:
+                if (ibox[1] - ibox[0] >= min_particle_size) and (ibox[3] - ibox[2] >= min_particle_size):
+                    index_boxes.append(ibox)
+        # Centros de las zonas
+        zone_centers = []
+        for key, centers in zones.items():
+            for center in centers:
+                x, y, _ = center
+                if pred_mask[int(x), int(y)] >= th:
+                    zone_centers.append((x, y))
+
+        filtered_index_boxes = [ibox for ibox in index_boxes if self.box_contains_any_center(ibox, zone_centers)]
+        merged_index_boxes = self.merge_nearby_index_boxes(filtered_index_boxes, 20)
+        final_bboxes = [self.index_box_to_square(ibox, image.shape) for ibox in merged_index_boxes]
+
+        # Dibuja los cuadrados sobre la imagen original (para mostrar en la interfaz)
         for bbox in final_bboxes:
             start_row, start_col, side = bbox
-            cv2.rectangle(image_color,
-                        (start_col, start_row),
-                        (start_col + side, start_row + side),
-                        (0, 0, 255), 4)
-            r, c, s = bbox
-            particle_img = image[r:r+s, c:c+s]
-            particle_crop = np.array(particle_img).astype(np.uint8)
+            cv2.rectangle(image_color, (start_col, start_row), (start_col + side, start_row + side), (0,0,255), 2)
+        # Regresa imagen en formato np.array, y los cuadros para las partículas
+        return image_color, final_bboxes
 
-            new_nano = Interactive_image(self.frame_acquisition, particle_crop, title = f'NP', subtitle=f'Coords:', font=('American typewriter', 24), subfont=('American typewriter', 14), width=150, height=150)
-            new_nano.pack(side = 'left')
-
-    def detect_and_plot(self, image, th = 0.5, min_particle_size = 0.1):
-        self.image_microscope.change_image(image)
-        image_pred, zones, num_particles, pred_mask = self.prediction(image, th=th)
-        self.image_prediction.change_image(image_pred)
-        centers, final_bboxes = create_boxes(image, min_particle_size=min_particle_size, th=th, 
-                                                               num_particles=num_particles, labeled_mask=image_pred, zones=zones, pred_mask=pred_mask)
-        
-        image_boxes = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-
-        self.image_microscope.change_image(image_boxes)
-
-        # Quitar este y cambiar por movimiento y captura de nanoparticulas
-        self.plot_particles(image, final_bboxes, image_color=image_boxes)
-
-    # <-------------------------------------------------------------------------Microscope Movement Functions------------------------------------------------------------------------->
-    def build_spiral_coordinates(self, total_cells=12):
-        coord_initial = []
-        directions = [(0, 1), (-1, 0), (0, -1), (1, 0)]
-        direction_index = 0
-        step_count = 0
-        step_limit = 1
-        direction_changes = 0
-
-        while len(coord_initial) < total_cells:
-
-            coord_initial.append(directions[direction_index])
-            step_count += 1
-
-            if step_count == step_limit:
-                step_count = 0
-                direction_index = (direction_index + 1) % 4
-                direction_changes += 1
-                
-                if direction_changes % 2 == 0:
-                    step_limit += 1
-
-        return coord_initial
-
-    #def movement(self, grid_x, grid_y, step_size, microscope):
-    #    microscope.specimen.stage.relative_move(StagePosition(x=grid_x * step_size, y=grid_y * step_size))
-    #    image = microscope.acquisition.acquire_stem_image(DetectorType.HAADF, ImageSize.PRESET_512, 1e-6) # Acquire the image
-    #    self.detect_and_plot(image=image, th=0.2)  # Detect and plot the particles in the image
-
-    
-# This is the main function that runs the GUI application   
 if __name__ == '__main__':
     app = Detection_gui()
     app.mainloop()
+        
 
 # Testeo cambiar número de la interfaz
     # self.frame_settings.nanoparticle_counter.update_counter(208)
