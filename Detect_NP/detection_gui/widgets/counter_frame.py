@@ -2,7 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 class Counter_frame(ctk.CTkFrame):
-    def __init__(self, root, text, font = ('American typewriter', 24), *args, **kwargs):
+    def __init__(self, root, text, font=('American typewriter', 24), *args, **kwargs):
         super().__init__(root, *args, **kwargs)
 
         self.counter_var = tk.IntVar(self, 0)
@@ -15,3 +15,4 @@ class Counter_frame(ctk.CTkFrame):
 
     def update_counter(self, count):
         self.counter_var.set(count)
+

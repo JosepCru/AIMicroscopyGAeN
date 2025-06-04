@@ -442,4 +442,4 @@ if __name__ == '__main__':
     # im = Image.new(mode="RGB", size=(200, 200))
     # image_path = os.path.join(self.frame_settings.directory_selector.directory, "test_image.png")
     # im.save(image_path)
-    # si me creo una variable self.directory = self.frame_settings.directory_selector.directory cambiaría automaticamente
+

@@ -102,14 +102,14 @@ class Detection_gui(ctk.CTk):
             num_images=int(self.np_number.get())
 
             for i in range(num_images):
-                image = f"C:\\Users\\josep\\Desktop\\extra_training\\images\\image_{i:04d}.png"
-                image = cv2.imread(image, cv2.IMREAD_GRAYSCALE)
-
-                # Movement and detection
+                image_path = f"C:\\Users\\josep\\Desktop\\extra_training\\images\\image_{i:04d}.png"
+                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
                 self.number_added = int(self.np_index.get()) + 1
                 self.np_index.set(self.number_added)
-                self.detect_and_plot(image, th=0.2)  # Assuming the image is a grayscale image
+
+                labeled_mask, pred_mask, boxes_image, particles = self.detect_and_plot(image, th=0.2)
+                self.save_capture(self.number_added, image, pred_mask, boxes_image, particles)
 
                 #microscope = TemMicroscopeClient()
                 #microscope.connect()
@@ -280,33 +280,84 @@ class Detection_gui(ctk.CTk):
         labeled_mask, num_particles = isolate_particles(pred_mask, th)
         return labeled_mask, zones, num_particles, pred_mask
 
-    def plot_particles(self, image, final_bboxes,image_color=None):
+    def plot_particles(self, image, final_bboxes, image_color=None):
+        particles = []
         for bbox in final_bboxes:
             start_row, start_col, side = bbox
-            cv2.rectangle(image_color,
-                        (start_col, start_row),
-                        (start_col + side, start_row + side),
-                        (0, 0, 255), 4)
-            r, c, s = bbox
-            particle_img = image[r:r+s, c:c+s]
+            if image_color is not None:
+                cv2.rectangle(
+                    image_color,
+                    (start_col, start_row),
+                    (start_col + side, start_row + side),
+                    (0, 0, 255),
+                    4,
+                )
+            particle_img = image[start_row : start_row + side, start_col : start_col + side]
             particle_crop = np.array(particle_img).astype(np.uint8)
+            particles.append((particle_crop, (start_row, start_col)))
 
-            new_nano = Interactive_image(self.frame_acquisition, particle_crop, title = f'NP', subtitle=f'Coords:', font=('American typewriter', 24), subfont=('American typewriter', 14), width=150, height=150)
-            new_nano.pack(side = 'left')
+            new_nano = Interactive_image(
+                self.frame_acquisition,
+                particle_crop,
+                title="NP",
+                subtitle=f"Coords: ({start_row}, {start_col})",
+                font=("American typewriter", 24),
+                subfont=("American typewriter", 14),
+                width=150,
+                height=150,
+            )
+            new_nano.pack(side="left")
 
-    def detect_and_plot(self, image, th = 0.5, min_particle_size = 0.1):
+        return particles
+
+    def detect_and_plot(self, image, th=0.5, min_particle_size=0.1):
         self.image_microscope.change_image(image)
-        image_pred, zones, num_particles, pred_mask = self.prediction(image, th=th)
-        self.image_prediction.change_image(image_pred)
-        centers, final_bboxes = create_boxes(image, min_particle_size=min_particle_size, th=th, 
-                                                               num_particles=num_particles, labeled_mask=image_pred, zones=zones, pred_mask=pred_mask)
-        
-        image_boxes = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        labeled_mask, zones, num_particles, pred_mask = self.prediction(image, th=th)
+        self.image_prediction.change_image(labeled_mask)
 
+        centers, final_bboxes = create_boxes(
+            image,
+            min_particle_size=min_particle_size,
+            th=th,
+            num_particles=num_particles,
+            labeled_mask=labeled_mask,
+            zones=zones,
+            pred_mask=pred_mask,
+        )
+
+        image_boxes = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        particles = self.plot_particles(image, final_bboxes, image_color=image_boxes)
         self.image_microscope.change_image(image_boxes)
 
-        # Quitar este y cambiar por movimiento y captura de nanoparticulas
-        self.plot_particles(image, final_bboxes, image_color=image_boxes)
+        return labeled_mask, pred_mask, image_boxes, particles
+
+    def save_capture(self, index, original_image, pred_image, boxes_image, particles, zone=""):
+        base_dir = os.path.join(self.directory.directory, "Images")
+        os.makedirs(base_dir, exist_ok=True)
+        capture_dir = os.path.join(base_dir, f"capture_{index:04d}")
+        os.makedirs(capture_dir, exist_ok=True)
+
+        Image.fromarray(original_image).save(os.path.join(capture_dir, "microscope.png"))
+        Image.fromarray((pred_image * 255).astype(np.uint8)).save(
+            os.path.join(capture_dir, "prediction.png")
+        )
+        Image.fromarray(boxes_image).save(os.path.join(capture_dir, "boxes.png"))
+
+        pd.DataFrame({"index": [index], "zone": [zone]}).to_excel(
+            os.path.join(capture_dir, "capture_info.xlsx"), index=False
+        )
+
+        particles_dir = os.path.join(capture_dir, "particles")
+        os.makedirs(particles_dir, exist_ok=True)
+        particle_rows = []
+        for i, (img, (r, c)) in enumerate(particles):
+            Image.fromarray(img).save(os.path.join(particles_dir, f"particle_{i:04d}.png"))
+            particle_rows.append({"particle": i, "row": r, "col": c})
+
+        if particle_rows:
+            pd.DataFrame(particle_rows).to_excel(
+                os.path.join(particles_dir, "particles_info.xlsx"), index=False
+            )
 
     # <-------------------------------------------------------------------------Microscope Movement Functions------------------------------------------------------------------------->
     def build_spiral_coordinates(self, total_cells=12):
@@ -351,4 +402,4 @@ if __name__ == '__main__':
     # im = Image.new(mode="RGB", size=(200, 200))
     # image_path = os.path.join(self.frame_settings.directory_selector.directory, "test_image.png")
     # im.save(image_path)
-    # si me creo una variable self.directory = self.frame_settings.directory_selector.directory cambiaría automaticamente
+

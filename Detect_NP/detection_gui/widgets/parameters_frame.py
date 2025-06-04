@@ -19,4 +19,4 @@ class Parameters_frame(ctk.CTkFrame):
         for label, entry in zip(self.labels_list, self.entrys_list):
             label.grid(row = i, column = 0,  sticky = 'e', padx = 5, pady = 10) 
             entry.grid(row = i, column = 1,  padx = 5, pady = 10)
-            i += 1
+

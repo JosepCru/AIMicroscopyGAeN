@@ -94,4 +94,4 @@ class Interactive_image(ctk.CTkFrame):
         self.zoom_item = self.canvas.create_image(event.x, event.y, anchor=tk.CENTER)
         self.zoom(event)
 
-    
+

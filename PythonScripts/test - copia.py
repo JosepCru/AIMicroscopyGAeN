@@ -33,4 +33,4 @@ if DetectorType.HAADF in scanning_detectors:
 
 print("Example script finished successfully.")
 
-microscope.disconnect()
+
